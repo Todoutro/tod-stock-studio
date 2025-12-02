@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 # 1. 填入你的 PushPlus Token (不要留空)
 DEFAULT_WECHAT_TOKEN = "4364438ae3014d628e1cae92bbf00cc0" 
 
-# 2. 开启自动巡航 (True = 默认开启)
+# 2. 开启自动巡航 (True = 默认开启，打开网页即自动运行)
 DEFAULT_AUTO_PILOT = True  
 # ==========================================
 
@@ -36,7 +36,7 @@ def log_system_status():
     except: return "Monitor Fail"
 
 # --- 1. 页面配置 ---
-st.set_page_config(page_title="Tod's Studio V10.9 (Mastered)", page_icon="🎸", layout="wide")
+st.set_page_config(page_title="Tod's Studio V10.10 (Golden Master)", page_icon="🎸", layout="wide")
 
 st.markdown("""
 <style>
@@ -102,7 +102,7 @@ if 'current_ticker' not in st.session_state:
     first_valid = next((x for x in st.session_state['settings']['favorites'] if x), "QQQ")
     st.session_state['current_ticker'] = first_valid
 
-# --- 3. 数据层 ---
+# --- 3. 数据层 (V10.0 Robust) ---
 def sanitize_ticker(ticker):
     return re.sub(r'[^A-Za-z0-9\.\^]', '', str(ticker).upper())[:20] if ticker else ""
 
@@ -115,6 +115,8 @@ def get_random_agent():
 
 def validate_stock_data(df, min_days=50):
     if df is None or len(df) < min_days: return False
+    required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+    if not all(col in df.columns for col in required_cols): return False
     return True
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -126,7 +128,7 @@ def fetch_data_safe(ticker, period="2y"):
         df = stock.history(period=period, interval="1d", auto_adjust=False)
         if validate_stock_data(df, 200 if period=="max" else 50): return df
         
-        # Bypass
+        # Bypass for new stocks/issues
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range={period}"
         r = requests.get(url, headers={'User-Agent': get_random_agent()}, timeout=5)
         data = r.json()
@@ -153,7 +155,7 @@ def get_market_benchmark(ticker):
 def fetch_pair_data(ticker):
     return fetch_data_safe(ticker, "2y"), fetch_data_safe(get_market_benchmark(ticker), "2y")
 
-# --- 4. 算法与分析 (DSP - V10.0 Logic Restored) ---
+# --- 4. 算法与分析 (V10.0 Logic Restored) ---
 def optimize_display_data(df, max_points=800):
     return df.tail(max_points).copy() if len(df) > max_points else df
 
@@ -185,7 +187,13 @@ def calculate_advanced_metrics(df, bench_df, atr_multiplier=2.5):
         df['SMA200'] = df['Close'].rolling(200).mean()
         df['Bias50'] = (df['Close'] - df['SMA50']) / df['SMA50'] * 100
         
-        df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
+        # ATR Logic
+        high_low = df['High'] - df['Low']
+        high_prev = np.abs(df['High'] - df['Close'].shift(1))
+        low_prev = np.abs(df['Low'] - df['Close'].shift(1))
+        tr = np.maximum(high_low, np.maximum(high_prev, low_prev))
+        df['ATR'] = tr.rolling(14).mean()
+        
         df['Stop_Loss_Long'] = (df['Close'].rolling(20).max() - df['ATR'] * atr_multiplier).clip(lower=df['Close']*0.7)
         
         df['RSI'] = calculate_rsi_vectorized_fixed(df['Close'], 14)
@@ -205,12 +213,12 @@ def calculate_advanced_metrics(df, bench_df, atr_multiplier=2.5):
             common = df.index.intersection(bench_df.index)
             if len(common) > 20:
                 df['RS_Raw'] = (df.loc[common,'Close'].pct_change() - bench_df.loc[common,'Close'].pct_change()).fillna(0)
-                df['RS_Trend'] = df['RS_Raw'].rolling(20).mean() * 100 # V10.0 Logic
+                df['RS_Trend'] = df['RS_Raw'].rolling(20).mean() * 100
                 df['RS_Momentum'] = df['RS_Trend'] - df['RS_Trend'].shift(5)
     except: pass
     return df.dropna()
 
-# [V10.9 Fix] 完全还原 V10.0 的核心评分逻辑，防止 VOO 150分
+# [V10.10] 严格复刻 V10.0 的核心评分逻辑 (Uncapped Score)
 def calculate_core_score(row, df_hist_slice=None, benchmark_name="Benchmark"):
     score = 50
     reasons = []
@@ -238,11 +246,9 @@ def calculate_core_score(row, df_hist_slice=None, benchmark_name="Benchmark"):
     mom_score = 0
     if row.get('MACD', 0) > row.get('MACD_Signal', 0): mom_score += 10
     
-    # RSI 逻辑校准
     rsi_val = row.get('RSI', 50)
     if 50 < rsi_val <= 75: mom_score += 15 
     elif rsi_val > 75: mom_score += 5 
-    
     if 40 < rsi_rank < 80: mom_score += 5
 
     score += mom_score
@@ -276,14 +282,12 @@ def calculate_core_score(row, df_hist_slice=None, benchmark_name="Benchmark"):
     if bias_rank > 95: 
         penalty -= 15
         reasons.append("⚠ 短期乖离过大")
-        
     if rsi_val > 85: 
         penalty -= 10
         reasons.append("⚠ RSI超买")
     score += penalty
     
-    # [V10.9 Fix] 增加总分限制器
-    if score > 120: score = 120
+    # [V10.10] 移除 120 分上限，还原 V10.0 逻辑
     
     return score, reasons
 
@@ -336,7 +340,7 @@ def send_wechat_msg(token, title, content):
         return True
     except: return False
 
-# --- 6. 自动扫描 (信号翻转逻辑) ---
+# --- 6. 自动扫描 (信号翻转逻辑 + V10.0 Scoring) ---
 def perform_auto_scan(push_token=None, force_refresh=False):
     valid_favs = [t for t in st.session_state['settings']['favorites'] if t]
     if not valid_favs: return
@@ -366,18 +370,18 @@ def perform_auto_scan(push_token=None, force_refresh=False):
             df = fetch_data_safe(ticker, "2y")
             if validate_stock_data(df, 200):
                 my_bench = get_market_benchmark(ticker)
-                # [V10.9 Fix] 如果基准是自己，强制换成 QQQ
-                if my_bench == ticker: my_bench = "QQQ"
                 
                 df = calculate_advanced_metrics(df, bench_cache.get(my_bench))
                 if not df.empty:
                     curr = df.iloc[-1]
+                    # [V10.10] 使用还原后的 V10.0 评分逻辑
                     score, reasons = calculate_core_score(curr, df, my_bench)
                     new_status = get_status_emoji(score)
                     
                     last_status = st.session_state['last_known_status'].get(ticker)
                     st.session_state['ticker_status'][ticker] = new_status
                     
+                    # 信号翻转推送策略 (Signal Flip Strategy)
                     if push_token and last_status and (new_status != last_status):
                         msg = f"<b>🔄 信号翻转: {ticker}</b><br>从 {last_status} 变更为 {new_status}<br>现价: ${curr['Close']:.2f}<br>评分: {score}<br>理由: {', '.join(reasons)}"
                         send_wechat_msg(push_token, f"{new_status} {ticker} 变盘提醒", msg)
@@ -472,8 +476,8 @@ def generate_local_response(prompt, ticker, curr, advice):
 
 # --- UI Render ---
 with st.sidebar:
-    st.title("🎸 Tod's V10.9")
-    st.caption("Mastered | Auto-Pilot")
+    st.title("🎸 Tod's V10.10")
+    st.caption("Golden Master | Cloud")
     
     with st.expander("📡 微信耳返 (Push)", expanded=False):
         wechat_token = st.text_input("PushPlus Token", value=DEFAULT_WECHAT_TOKEN, type="password")
@@ -550,15 +554,47 @@ try:
             st.session_state['ticker_status'][ticker] = get_status_emoji(advice['score_mod'])
             
             k1, k2, k3, k4, k5 = st.columns(5)
-            # Tooltips logic
-            p_help = f"收盘价: ${curr['Close']:.2f}\n" + ("✅ >SMA50 (中强)" if curr['Close']>curr['SMA50'] else "⚠️ <SMA50 (中弱)")
-            rv_help = "🔥 爆量" if curr['RVol']>1.5 else "温和" if curr['RVol']>0.8 else "🧊 缩量"
-            rsi_help = "⚠️ 超买" if curr['RSI']>70 else "💎 超卖" if curr['RSI']<30 else "中性"
-            rs_help = f"🚀 领跑 {bench_name}" if curr.get('RS_Momentum',0)>0 else "🐌 跑输"
-            atr_help = f"🛡️ 移动止损: ${curr['Stop_Loss_Long']:.2f}"
+            
+            # [V10.10 Restored] V10.0 的详细 Tooltips 逻辑，这才是你想要的！
+            # 1. Price Help
+            price_help = f"收盘价: ${curr['Close']:.2f}\n"
+            if curr['Close'] > curr['SMA50']: price_help += "✅ >SMA50 (中期强势)\n"
+            else: price_help += "⚠️ <SMA50 (中期弱势)\n"
+            if curr['Close'] > curr['SMA200']: price_help += "✅ >SMA200 (长期牛市)"
+            else: price_help += "⚠️ <SMA200 (长期熊市)"
+            
+            # 2. RVol Help
+            rvol_val = curr['RVol']
+            if rvol_val > 1.5: rvol_help = "🔥 爆量: 主力大举介入，波动加剧。"
+            elif rvol_val > 1.2: rvol_help = "⚡ 放量: 交易活跃，趋势确认度高。"
+            elif rvol_val < 0.8: rvol_help = "🧊 缩量: 市场观望，缺乏方向。"
+            else: rvol_help = "温和: 成交量正常。"
+            
+            # 3. RSI Help
+            rsi_val = curr.get('RSI', 50)
+            if rsi_val > 75: rsi_help = "🔥 严重超买: 情绪狂热，风险极高。"
+            elif rsi_val > 70: rsi_help = "⚠️ 超买区: 短期过热，谨防回调。"
+            elif rsi_val < 25: rsi_help = "🧊 严重超卖: 恐慌盘涌出，反弹一触即发。"
+            elif rsi_val < 30: rsi_help = "💎 超卖区: 情绪低迷，关注底部机会。"
+            elif rsi_val > 50: rsi_help = "🐂 多头区: 买盘占优。"
+            else: rsi_help = "🐻 空头区: 卖盘占优。"
+            
+            # 4. RS Help
+            rs_val = curr.get('RS_Momentum', 0)
+            if rs_val > 0.1: rs_help = "🚀 显著领跑: 走势大幅强于基准，机构抱团。"
+            elif rs_val > 0: rs_help = "✅ 小幅领先: 略强于大盘。"
+            else: rs_help = "🐌 跑输大盘: 资金流出或关注度下降。"
+            rs_help += f"\n(基准: {bench_name})"
+            
+            # 5. ATR Help
+            stop_p = curr['Stop_Loss_Long']
+            dist = (curr['Close'] - stop_p) / curr['Close'] * 100
+            atr_help = f"🛡️ 移动止损线: ${stop_p:.2f}\n"
+            atr_help += f"当前安全垫: {dist:.1f}%\n"
+            atr_help += "原理: 价格跌破此线表示波动率异常放大，趋势可能反转。"
 
-            k1.metric("现价", f"${curr['Close']:.2f}", f"{(curr['Close']-df.iloc[-2]['Close'])/df.iloc[-2]['Close']*100:.2f}%", help=p_help)
-            k2.metric("RVol", f"{curr['RVol']:.2f}x", help=rv_help)
+            k1.metric("现价", f"${curr['Close']:.2f}", f"{(curr['Close']-df.iloc[-2]['Close'])/df.iloc[-2]['Close']*100:.2f}%", help=price_help)
+            k2.metric("RVol", f"{curr['RVol']:.2f}x", help=rvol_help)
             k3.metric("RSI", f"{curr['RSI']:.1f}", help=rsi_help)
             k4.metric("RS动量", f"{curr.get('RS_Momentum',0):.2f}", help=rs_help)
             k5.metric("ATR止损", f"${curr['Stop_Loss_Long']:.2f}", help=atr_help)
@@ -606,7 +642,7 @@ try:
             fig.update_layout(height=800, margin=dict(l=0,r=0,t=0,b=0), xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
             
-            # [V10.8] 找回的智能助理模块 (Restored Chat Assistant)
+            # [V10.10] 找回丢失的 AI 助理
             st.markdown("---")
             with st.expander(f"💬 智能助理 ({ticker} 专属)", expanded=True):
                 if st.session_state.get('chat_context_ticker') != ticker:
