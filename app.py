@@ -14,6 +14,17 @@ import requests
 import re
 from datetime import datetime, timedelta
 
+# ==========================================
+# 🎛️ 用户配置区 (USER CONFIGURATION)
+# ==========================================
+# 1. 在这里填入你的 PushPlus Token (保留引号)
+#    例如: DEFAULT_WECHAT_TOKEN = "4364438ae3014d628e1cae92bbf00cc0"
+DEFAULT_WECHAT_TOKEN = "4364438ae3014d628e1cae92bbf00cc0" 
+
+# 2. 是否默认开启自动巡航? (True=开启, False=关闭)
+DEFAULT_AUTO_PILOT = False  
+# ==========================================
+
 # --- 0. 生产环境初始化 (Production Setup) ---
 
 logging.basicConfig(
@@ -68,7 +79,7 @@ def log_system_status():
 
 # --- 1. 页面配置 (UI Design) ---
 st.set_page_config(
-    page_title="Tod's Studio V10.5 (Tour Edition)",
+    page_title="Tod's Studio V10.6 (Memory)",
     page_icon="🎸",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -133,6 +144,16 @@ st.markdown("""
         font-size: 0.8em;
         text-align: center;
         animation: pulse 2s infinite;
+    }
+    
+    /* 无信号样式 */
+    .no-signal {
+        background-color: #343a40;
+        color: #f8f9fa;
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
+        font-family: 'Courier New', monospace;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -617,166 +638,15 @@ def perform_auto_scan(push_token=None, force_refresh=False):
     st.session_state['scan_executed'] = True
     st.session_state['last_scan_time'] = datetime.now()
 
-# --- 5. 诊断引擎 ---
-def us_market_advice(curr, atr_mult, benchmark_name, df_hist=None):
-    advice = {"status": "", "action": "", "reason": [], "metaphor": "", "score_mod": 0}
-    price = curr['Close']
-    stop_loss = curr.get('Stop_Loss_Long', price * 0.9)
-    
-    if price <= stop_loss:
-        advice.update({
-            "status": "🔴 硬限幅切断 (Hard Clip)",
-            "action": "❌ 坚决离场 / 止损",
-            "metaphor": f"触发 ATR 风控。为保住本金，必须切断信号。",
-            "reason": [f"跌破 ${stop_loss:.2f} 止损线"]
-        })
-        return advice
-        
-    score, reasons = calculate_core_score(curr, df_hist, benchmark_name)
-    advice["score_mod"] = score
-    advice["reason"] = reasons if reasons else ["技术面中性"]
-    
-    if score >= 110:
-        advice.update({"status": "🟣 紫色传说 (Ultra)", "action": "🚀🚀 坚定锁仓 / 享受主升浪", "metaphor": "完美共振，动态范围突破天际！"})
-    elif score >= 100:
-        advice.update({"status": "🟢 黄金买点 (Golden)", "action": "🚀 积极做多 / 加仓", "metaphor": "信号极强，能量充沛。"})
-    elif score >= 90:
-        advice.update({"status": "🥎 趋势良好 (Strong)", "action": "✅ 持有 / 适度加仓", "metaphor": "信号清晰，信噪比高。"})
-    elif score >= 75:
-        advice.update({"status": "🟡 震荡整理 (Linear)", "action": "👀 观望 / 保持仓位", "metaphor": "线性区间，无明显失真。"})
-    elif score >= 45:
-        advice.update({"status": "🟠 动能减弱 (Weak)", "action": "🛡️ 减仓 / 提高警惕", "metaphor": "高频衰减，声音变闷。"})
-    else:
-        advice.update({"status": "🔴 风险区域 (Risk)", "action": "❌ 离场 / 避险", "metaphor": "技术面走弱，底噪过大。"})
-    
-    return advice
-
-# --- 6. 回测模块 ---
-def calculate_max_drawdown(equity_curve):
-    if not equity_curve: return 0.0
-    s = pd.Series(equity_curve)
-    rolling_max = s.cummax()
-    drawdown = (s - rolling_max) / rolling_max
-    max_dd = drawdown.min()
-    return max_dd * 100 
-
-def calculate_performance_metrics(returns):
-    if len(returns) < 2: return {}
-    metrics = {}
-    total_ret = (1 + returns).prod() - 1
-    days = len(returns)
-    metrics['CAGR'] = ((1 + total_ret) ** (252/days) - 1) * 100 if days > 0 else 0
-    excess_ret = returns - 0.02/252
-    metrics['Sharpe'] = np.sqrt(252) * excess_ret.mean() / returns.std() if returns.std() > 0 else 0
-    metrics['WinRate'] = (returns > 0).mean() * 100
-    return metrics
-
-def run_backtest_dynamic(ticker, years=10, initial_capital=100000, atr_mult=3.0, commission=0.001, slippage=0.0005):
-    bench_ticker = get_market_benchmark(ticker)
-    try:
-        fetch_period = "max" if years > 2 else "5y"
-        df = fetch_data_safe(ticker, fetch_period)
-        time.sleep(random.uniform(0.8, 1.5))
-        df_bench = fetch_data_safe(bench_ticker, fetch_period)
-        if df is None or df.empty: return None, None
-        if df_bench is None or len(df_bench) < 100: df_bench = pd.DataFrame()
-
-        available_days = len(df)
-        warmup_days = 200
-        tradable_days = available_days - warmup_days
-        if tradable_days < 10: return None, None
-        
-        required_days = years * 250
-        real_years = years
-        if tradable_days < required_days:
-            real_years = tradable_days / 250
-            cutoff = df.index[-tradable_days]
-        else:
-            cutoff = pd.Timestamp.now() - pd.DateOffset(years=years)
-        if df.index[0] > cutoff: cutoff = df.index[0]
-            
-        df_metrics = calculate_advanced_metrics(df, df_bench if not df_bench.empty else None, atr_mult)
-        df_backtest = df_metrics[df_metrics.index >= cutoff].copy()
-        if len(df_backtest) < 10: return None, None 
-        
-        cash = initial_capital
-        position = 0
-        equity_strategy = []
-        equity_bh = []
-        buy_hold_shares = initial_capital / (df_backtest['Close'].iloc[0] * (1 + slippage + commission))
-        in_market = False
-        stop_loss = 0
-        highest_price = 0
-        
-        for i in range(len(df_backtest)):
-            curr = df_backtest.iloc[i]
-            current_date = curr.name
-            price = curr['Close']
-            equity_bh.append(buy_hold_shares * price)
-            if i < 1: 
-                equity_strategy.append(cash)
-                continue
-            history_up_to_yesterday = df_metrics.loc[:current_date].iloc[:-1]
-            score, _ = calculate_core_score(curr, history_up_to_yesterday)
-            
-            if in_market:
-                if price > highest_price:
-                    highest_price = price
-                    new_stop = highest_price - (curr['ATR'] * atr_mult)
-                    if new_stop > stop_loss: stop_loss = new_stop
-                hard_stop = price < stop_loss
-                soft_exit = (score < 45) and (curr.get('MACD', 0) < curr.get('MACD_Signal', 0))
-                if hard_stop or soft_exit:
-                    sell_price = price * (1 - slippage)
-                    cash = position * sell_price * (1 - commission)
-                    position = 0
-                    in_market = False
-            else:
-                cash = cash * (1 + 0.035/252) 
-                if (score >= 80) or (score >= 65 and price > curr.get('SMA50', 0)):
-                    buy_price = price * (1 + slippage)
-                    cost = cash * (1 - commission)
-                    position = cost / buy_price
-                    cash = 0
-                    in_market = True
-                    highest_price = price
-                    stop_loss = price - (curr['ATR'] * atr_mult)
-            equity_strategy.append(cash if not in_market else position * price)
-        res_df = pd.DataFrame({'Strategy': equity_strategy, 'Buy_Hold': equity_bh}, index=df_backtest.index)
-        return res_df, real_years
-    except Exception as e:
-        return None, None
-
-def optimize_display_data(df, max_points=800):
-    if len(df) > max_points: return df.tail(max_points).copy()
-    return df
-
-def generate_local_response(prompt, ticker, curr_data, advice):
-    prompt = prompt.lower()
-    if "买" in prompt or "buy" in prompt or "入手" in prompt:
-        if "🟢" in advice['status'] or "🟣" in advice['status']:
-            return f"🤖 **AI 分析:** {ticker} 目前处于 **{advice['status']}**。系统评分为 {advice['score_mod']}，属于高信噪比区域，建议根据资金管理原则分批介入。"
-        elif "🔴" in advice['status']:
-            return f"🤖 **AI 分析:** 警告！{ticker} 目前触发 **{advice['status']}**，可能会有进一步下行风险。建议暂时观望，不要接飞刀。"
-        else:
-            return f"🤖 **AI 分析:** {ticker} 目前处于 **{advice['status']}**，趋势不明显。如果你的策略是趋势跟踪，建议等待信号明确。"
-    elif "卖" in prompt or "sell" in prompt or "止损" in prompt:
-        return f"🤖 **AI 分析:** 当前的 ATR 动态止损位在 **${curr_data['Stop_Loss_Long']:.2f}**。如果收盘价跌破此位置，系统建议无条件离场以保护本金。"
-    elif "rsi" in prompt:
-        return f"🤖 **AI 数据:** 当前 RSI 为 **{curr_data['RSI']:.1f}**。"
-    elif "atr" in prompt:
-        return f"🤖 **AI 数据:** 当前 ATR (波动率) 为 **{curr_data['ATR']:.2f}**。"
-    else:
-        return f"🤖 **AI 助理:** 我是一个专注于 {ticker} 交易信号的本地 AI。你可以问我关于 **买卖建议**、**止损位**、**RSI** 或 **趋势** 的问题。"
-
 # --- 7. UI 主程序 ---
 with st.sidebar:
-    st.title("🎸 Tod's V10.5")
-    st.caption("Tour Edition | LTS")
+    st.title("🎸 Tod's V10.6")
+    st.caption("Memory Edition | LTS")
     
     # [V10.5] 微信推送配置区
     with st.expander("📡 微信耳返 (Push)", expanded=False):
-        wechat_token = st.text_input("PushPlus Token", type="password", help="去 pushplus.plus 获取 Token 填入此处。填入后自动激活报警。")
+        # [V10.6] 读取默认配置
+        wechat_token = st.text_input("PushPlus Token", value=DEFAULT_WECHAT_TOKEN, type="password", help="在代码头部填入 DEFAULT_WECHAT_TOKEN 可永久保存。")
         if wechat_token and st.button("🔔 测试连通性"):
             if send_wechat_msg(wechat_token, "Tod Studio Soundcheck", "你的耳返系统工作正常！🎤"):
                 st.success("Test Signal Sent!")
@@ -785,7 +655,8 @@ with st.sidebar:
 
     # [V9.7] 自动巡航 - 核心控制区
     st.markdown("### 🔄 自动巡航 (Auto-Pilot)")
-    enable_auto_refresh = st.checkbox("沉浸式监控 (60s刷新)", value=False, help="开启后，系统将自动循环扫描。Emoji 颜色会随股价实时更新。")
+    # [V10.6] 读取默认配置
+    enable_auto_refresh = st.checkbox("沉浸式监控 (60s刷新)", value=DEFAULT_AUTO_PILOT, help="开启后，系统将自动循环扫描。")
     
     countdown_placeholder = st.empty()
     
@@ -801,7 +672,9 @@ with st.sidebar:
 
     # [V9.7 关键逻辑修复] 检查扳机，如果被扣动，立即扫描
     if not st.session_state['scan_executed'] or st.session_state.get('trigger_refresh', False):
-        perform_auto_scan(push_token=wechat_token if enable_auto_refresh else None, force_refresh=True)
+        # 仅当勾选了自动刷新时，才传入 Token 进行推送；否则只扫描不推送，避免误报
+        token_to_use = wechat_token if enable_auto_refresh else None
+        perform_auto_scan(push_token=token_to_use, force_refresh=True)
         st.session_state['trigger_refresh'] = False # 扫描完，重置扳机
 
     with st.expander("⚙️ 系统调音台", expanded=False):
@@ -858,8 +731,14 @@ with st.sidebar:
         st.caption("基本面数据暂不可用")
 
     st.markdown("---")
-    with st.expander("🧮 仓位增益", expanded=True):
-        account_risk = st.number_input("本笔投入", value=200000, step=10000)
+    with st.expander("🧮 仓位增益 (Risk/Reward)", expanded=True):
+        # [V10.3] 新增 盈亏比计算器
+        c_gain1, c_gain2 = st.columns(2)
+        with c_gain1:
+            account_risk = st.number_input("本笔投入", value=200000, step=10000)
+        with c_gain2:
+            rr_ratio = st.number_input("目标盈亏比 (R/R)", value=2.0, step=0.5, help="你希望赚取的利润是风险的多少倍？通常设为 2.0 或 3.0。")
+            
         risk_pct = st.slider("最大风控 %", 0.5, 5.0, 2.0)
     
     st.caption(log_system_status())
@@ -976,15 +855,25 @@ try:
                     else:
                         st.error("❌ 发送失败，请检查 Token。")
             
+            # [V10.3] Calculate Profit Target
             if "❌" not in advice['action']:
-                price_risk = max(0.01, curr['Close'] - curr['Stop_Loss_Long'])
+                price_risk_per_share = max(0.01, curr['Close'] - curr['Stop_Loss_Long'])
+                
+                # 计算止盈目标价
+                target_price = curr['Close'] + (price_risk_per_share * rr_ratio)
+                potential_gain_pct = (target_price - curr['Close']) / curr['Close'] * 100
+                
+                # 仓位计算
                 atr_risk = 2 * curr['ATR']
-                risk_unit = max(price_risk, atr_risk)
+                risk_unit = max(price_risk_per_share, atr_risk)
                 vol_factor = 1.0
                 if curr['ATR']/curr['Close'] > 0.05: vol_factor = 0.7 
                 elif curr['ATR']/curr['Close'] < 0.02: vol_factor = 1.2 
                 shares = int((account_risk * (risk_pct/100) * vol_factor) / risk_unit)
-                st.info(f"💡 **Gain Staging:** 建议仓位 **{shares}** 股 (波动率系数 {vol_factor:.1f}x)")
+                
+                c_s1, c_s2 = st.columns(2)
+                c_s1.info(f"💡 **Gain Staging:** 建议仓位 **{shares}** 股 (波动率系数 {vol_factor:.1f}x)")
+                c_s2.success(f"🎯 **Target Lock (1:{rr_ratio:.1f}):** ${target_price:.2f} (+{potential_gain_pct:.1f}%)")
 
             # [V9.9] Chart 升级：4轨道堆叠 (Price, Vol, RSI, MACD)
             fig = make_subplots(rows=4, cols=1, shared_xaxes=True, row_heights=[0.5, 0.15, 0.15, 0.2], vertical_spacing=0.03)
@@ -995,6 +884,10 @@ try:
             fig.add_trace(go.Scatter(x=df_display.index, y=df_display['SMA200'], line=dict(color='royalblue', width=1), name='SMA200'), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_display.index, y=df_display['BB_Upper'], line=dict(color='gray', width=0.5, dash='dot'), name='BB'), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_display.index, y=df_display['Stop_Loss_Long'], line=dict(color='#9400D3', width=1.5, dash='dash'), name='ATR止损'), row=1, col=1)
+            
+            # [V10.3] Add Target Line
+            if "❌" not in advice['action']:
+                fig.add_hline(y=target_price, line_dash="dot", line_color="#198754", row=1, col=1, annotation_text=f"Target (R/R {rr_ratio}): ${target_price:.2f}", annotation_position="top right")
             
             # Row 2: Volume
             colors = ['#28a745' if r > 0 else '#dc3545' for r in df_display['Close'].diff()]
