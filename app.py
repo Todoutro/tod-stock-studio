@@ -20,8 +20,8 @@ from datetime import datetime, timedelta
 # 1. 填入你的 PushPlus Token (不要留空)
 DEFAULT_WECHAT_TOKEN = "4364438ae3014d628e1cae92bbf00cc0" 
 
-# 2. 开启自动巡航 (改成 True 默认开启)
-DEFAULT_AUTO_PILOT = False  
+# 2. 开启自动巡航 (True = 默认开启，打开网页即自动运行)
+DEFAULT_AUTO_PILOT = True  
 # ==========================================
 
 # --- 0. 生产环境初始化 (Production Setup) ---
